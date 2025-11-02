@@ -1,0 +1,115 @@
+from fastapi import FastAPI, WebSocket , Depends ,  Query  , Cookie , WebSocketException , status , WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from typing import Annotated
+
+app = FastAPI()
+
+
+html = """
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Chat</title>
+    </head>
+    <body>
+        <h1>WebSocket Chat</h1>
+        <h2>Your ID: <span id="ws-id"></span></h2>
+        <form action="" onsubmit="sendMessage(event)">
+            <input type="text" id="messageText" autocomplete="off"/>
+            <button>Send</button>
+        </form>
+        <ul id='messages'>
+        </ul>
+        <script>
+            var client_id = Date.now()
+            document.querySelector("#ws-id").textContent = client_id;
+            var ws = new WebSocket(`ws://localhost:8000/ws/${client_id}`);
+            ws.onmessage = function(event) {
+                var messages = document.getElementById('messages')
+                var message = document.createElement('li')
+                var content = document.createTextNode(event.data)
+                message.appendChild(content)
+                messages.appendChild(message)
+            };
+            function sendMessage(event) {
+                var input = document.getElementById("messageText")
+                ws.send(input.value)
+                input.value = ''
+                event.preventDefault()
+            }
+        </script>
+    </body>
+</html>
+"""
+
+"""
+@app.get("/")
+async def get():
+    return HTMLResponse(html)
+
+async def get_token_or_cookie(
+    websocket : WebSocket,
+    session : Annotated[str| None , Cookie() ] = None,
+    token : Annotated[str| None , Query() ] = None,
+): 
+    if session is None and token is None:
+        raise WebSocketException ( code = status.WS_1008_POLICY_VIOLATION)
+    return session or token 
+
+
+@app.websocket("/items/{item_id}/ws")
+async def websocket_endpoint(
+    *,
+    websocket: WebSocket ,
+    item_id  : str ,
+    q : int | None = None ,
+    session_or_token : Annotated[str , Depends(get_token_or_cookie)],
+):
+    await websocket.accept()
+    while True:
+        data = await websocket.receive_text()
+        await websocket.send_text(f"Session cookie or query token value is:{session_or_token}")
+        if q is not None:
+            await websocket.send_text(f"the query is {q}")
+        await websocket.send_text(f"Message text was: {data}, for item id: {item_id}")
+
+"""
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections : list[WebSocket] = []
+
+    async def connect(self, websocket : WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnected(self , websocket : WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_personal_msg(self, msg :str , websocket : WebSocket):
+        await websocket.send_text(msg)
+
+    async def send_broadcast(self , msg : str):
+        for connection in self.active_connections:
+            await connection.send_text(msg)
+
+manager = ConnectionManager()
+
+@app.get("/")
+async def get():
+    return HTMLResponse(html)
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket : WebSocket ,  client_id : int):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.send_personal_msg(f"you wrote: {data}", websocket)
+            await manager.send_broadcast(f"client number {client_id} says: {data}")
+    except WebSocketDisconnect:
+        manager.disconnected(websocket)
+        await manager.send_broadcast(f"client number {client_id} left the chat")
+
+
+
